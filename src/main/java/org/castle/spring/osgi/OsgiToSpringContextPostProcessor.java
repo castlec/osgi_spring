@@ -62,7 +62,15 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 	}
 
 	private static Resource[] getBlueprintResources(ResourcePatternResolver resourcePatternResolover) throws IOException {
-		return resourcePatternResolover.getResources(ResourcePatternResolver.CLASSPATH_ALL_URL_PREFIX + "/OSGI-INF/blueprint/blueprint.xml");
+		Resource[] resources = resourcePatternResolover.getResources(ResourcePatternResolver.CLASSPATH_ALL_URL_PREFIX + "/OSGI-INF/blueprint/blueprint.xml");
+		Resource[] ext_resources = resourcePatternResolover.getResources(ResourcePatternResolver.CLASSPATH_ALL_URL_PREFIX + "/OSGI-INF/blueprint/blueprint-ext.xml");
+		if(false&& ext_resources.length > 0) {
+			Resource[] resources_ = new Resource[resources.length + ext_resources.length];
+			System.arraycopy(resources, 0, resources_, 0, resources.length);
+			System.arraycopy(ext_resources, 0, resources_, resources.length, ext_resources.length);
+			resources = resources_;
+		}
+		return resources;
 	}
 
 	private static BlueprintContainerImpl loadOsgiFromResources(Resource[] resources, Resource[] namespaceResources,
@@ -73,7 +81,13 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 			urls.add(r.getURL());
 		}
 		String[] namespaces = loadNamespaces(resources);
-		SimpleNamespaceHandlerSet s = new SimpleNamespaceHandlerSet();
+		SimpleNamespaceHandlerSet s = new SimpleNamespaceHandlerSet() {
+
+			@Override
+			public void addNamespace(URI namespace, URL schema, NamespaceHandler handler) {
+				System.out.println("namespace: " + namespace.toString() + " " + schema.toString() + " " + handler.getClass().getName());
+				super.addNamespace(namespace, schema, handler);
+			}};
 		for (Resource r: namespaceResources) {
 			loadNamespace(s, r, namespaces);
 		}
@@ -173,7 +187,9 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 			NamespaceHandler h = (NamespaceHandler) c.newInstance();
 			org.apache.aries.blueprint.Namespaces annotation = (org.apache.aries.blueprint.Namespaces) c
 					.getAnnotation(org.apache.aries.blueprint.Namespaces.class);
-			namespaces = annotation.value();
+			if(annotation != null) {
+				namespaces = annotation.value();
+			}
 		} catch (ClassNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
