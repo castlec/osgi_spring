@@ -7,14 +7,26 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.function.Consumer;
+
+import javax.xml.stream.EventFilter;
+import javax.xml.stream.XMLEventReader;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.events.Namespace;
+import javax.xml.stream.events.StartElement;
+import javax.xml.stream.events.XMLEvent;
 
 import org.apache.aries.blueprint.NamespaceHandler;
 import org.apache.aries.blueprint.container.BlueprintContainerImpl;
 import org.apache.aries.blueprint.container.SimpleNamespaceHandlerSet;
 import org.apache.aries.blueprint.reflect.BeanMetadataImpl;
+import org.codehaus.stax2.ri.evt.NamespaceEventImpl;
 import org.osgi.service.blueprint.reflect.BeanArgument;
 import org.osgi.service.blueprint.reflect.BeanProperty;
 import org.osgi.service.blueprint.reflect.ComponentMetadata;
@@ -60,9 +72,10 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 		for(Resource r: resources) {
 			urls.add(r.getURL());
 		}
+		String[] namespaces = loadNamespaces(resources);
 		SimpleNamespaceHandlerSet s = new SimpleNamespaceHandlerSet();
 		for (Resource r: namespaceResources) {
-			loadNamespace(s, r);
+			loadNamespace(s, r, namespaces);
 		}
 		BlueprintContainerImpl impl = new BlueprintContainerImpl(classLoader, urls, null, s, true);
 		Set<String> componentIds = impl.getComponentIds();
@@ -77,8 +90,49 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 			out.println(component);
 		}
 	}
+	
+	private static String[] loadNamespaces(Resource ...resources ) {
+		if (resources == null) {
+			return new String[0];
+		}
+		
+		XMLInputFactory newInstance = XMLInputFactory.newInstance();
+		final Set<String> namespaces = new HashSet<String>();
+		for (Resource r : resources) {
+			try {
+				XMLEventReader streamReader = newInstance.createXMLEventReader(r.getInputStream());
+//				XMLEventReader filteredReader = newInstance.createFilteredReader(streamReader, new EventFilter() {
+//
+//					@Override
+//					public boolean accept(XMLEvent event) {
+//						return event.isNamespace();
+//					}});
+//				XMLEvent e = null;
+				streamReader.forEachRemaining(new Consumer<XMLEvent>() {
 
-	private static void loadNamespace(SimpleNamespaceHandlerSet s, Resource r) throws IOException,
+					@Override
+					public void accept(XMLEvent t) {
+						if(t.getEventType() == XMLEvent.START_ELEMENT) {
+							StartElement n = (StartElement) t;
+							System.out.println(n.getName());
+							Iterator namespaceURI = n.getNamespaces();
+							while(namespaceURI.hasNext()) {
+								Namespace namespace =  (Namespace) namespaceURI.next(); 
+								namespaces.add(namespace.getNamespaceURI());
+							}
+						}
+					}
+				});
+			} catch (XMLStreamException | IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+//			newFactory.
+		}
+		return namespaces.toArray(new String[namespaces.size()]);
+	}
+
+	private static void loadNamespace(SimpleNamespaceHandlerSet s, Resource r, String[] allNamespaces) throws IOException,
 			ClassNotFoundException, InstantiationException, IllegalAccessException, URISyntaxException {
 		Properties p = new Properties();
 		p.load(r.getInputStream());
@@ -86,23 +140,52 @@ public class OsgiToSpringContextPostProcessor implements BeanFactoryPostProcesso
 		String[] handlers = new String[keySet.size()];
 		keySet.toArray(handlers);
 		for (String handler: handlers) {
-			Class c = OsgiToSpringContextPostProcessor.class.getClassLoader().loadClass(handler);
+			Class c;
+			c = OsgiToSpringContextPostProcessor.class.getClassLoader().loadClass(handler);
 			NamespaceHandler h = (NamespaceHandler) c.newInstance();
-			org.apache.aries.blueprint.Namespaces annotation = (org.apache.aries.blueprint.Namespaces) c
-					.getAnnotation(org.apache.aries.blueprint.Namespaces.class);
-			String[] namespaces = annotation.value();
+			String[] namespaces = getNamespacesFromClass(handler, c);
+			if(namespaces == null) {
+				namespaces = allNamespaces;
+			}
 			for (String namespace : namespaces) {
 				URL schemaLocation = h.getSchemaLocation(namespace);
 				if (DEBUG) {
 					System.out.println(namespace);
 					System.out.println(schemaLocation);
 				}
-				s.addNamespace(new URI(namespace), schemaLocation, h);
+				if (schemaLocation != null) {
+					s.addNamespace(new URI(namespace), schemaLocation, h);
+				}
 			}
 			if (DEBUG) {
 				System.out.println(h.getClass().getName());
 			}
 		}
+	}
+	
+	//TODO change this to use reflections so it won't fail in older versions of aries. 
+	//loader will use default namespaces as provided by first pass with parser.
+	private static String[] getNamespacesFromClass(String handler, Class c) {
+		
+		String[] namespaces = null;
+		try {
+			c = OsgiToSpringContextPostProcessor.class.getClassLoader().loadClass(handler);
+			NamespaceHandler h = (NamespaceHandler) c.newInstance();
+			org.apache.aries.blueprint.Namespaces annotation = (org.apache.aries.blueprint.Namespaces) c
+					.getAnnotation(org.apache.aries.blueprint.Namespaces.class);
+			namespaces = annotation.value();
+		} catch (ClassNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (InstantiationException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IllegalAccessException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return namespaces;
+		
 	}
 	private ResourceLoader resourceLoader;
 	
